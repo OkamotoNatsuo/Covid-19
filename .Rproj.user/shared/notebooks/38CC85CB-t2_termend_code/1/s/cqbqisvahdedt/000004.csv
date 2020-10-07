@@ -1,0 +1,13 @@
+"0","#インタラクティブな地図"
+"0","tmap_mode('plot')"
+"2","tmap mode set to plotting
+"
+"0","tm_shape(Tokyo) +"
+"0","  tm_borders(col = ""white"") +"
+"0","  tm_fill(id = 'cityName',"
+"0","    col = ""patients_100000"","
+"0","    style = ""quantile"","
+"0","    palette = ""BuGn"","
+"0","    n = 6,"
+"0","    alpha = 0.7"
+"0","  )"

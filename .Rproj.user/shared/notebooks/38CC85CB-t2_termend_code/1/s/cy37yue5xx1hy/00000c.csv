@@ -1,0 +1,8 @@
+"0","#Getis-Ord Gの計算"
+"0","sfMeshClipDataTokyo <- sfMeshClipDataTokyo %>%"
+"0","  dplyr::mutate(getisordEstb = spdep::localG(totalEstb, swmDistTokyo))　 %>% "
+"0","  dplyr::mutate(getisordAmuse = spdep::localG(totalAmuse,swmDistTokyo))"
+"0","sfMeshClipDataOsaka <- sfMeshClipDataOsaka %>%"
+"0","  dplyr::mutate(getisordEstb = spdep::localG(totalEstb, swmDistOsaka)) %>% "
+"0","  dplyr::mutate(getisordAmuse = spdep::localG(totalAmuse,swmDistOsaka))"
+"0",""

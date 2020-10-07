@@ -1,0 +1,1 @@
+{"frames":[{"func":"lapply(listGetJson$result$prefs[[1]]$cities, function(x) {\n    c(x$total)\n})","file":"","line_number":0,"end_line_number":0,"character_number":0,"end_character_number":0}],"message":" lapply(listGetJson$result$prefs[[1]]$cities, function(x) { でエラー: \n   オブジェクト 'listGetJson' がありません \n"}

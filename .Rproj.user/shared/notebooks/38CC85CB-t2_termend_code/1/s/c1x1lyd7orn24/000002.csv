@@ -1,0 +1,4 @@
+"0","total <- as.numeric(lapply(listGetJson$result$prefs[[1]]$cities, function(x) {c(x$total)}))"
+"2"," lapply(listGetJson$result$prefs[[1]]$cities, function(x) { でエラー: 
+   オブジェクト 'listGetJson' がありません 
+"

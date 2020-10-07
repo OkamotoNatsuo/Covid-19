@@ -1,0 +1,5 @@
+"0","dataOsakaCity <- tibble(count = apply(OsakaCity[7:14],2,sum),ages = c('all',""age15"",""age20"",""age30"",""age40"",""age50"",""age60"",""age70""))"
+"0","gOsakaCity <- ggplot(dataShibuya[c(2:8),], aes(x = ages, y = count))+ "
+"0","  geom_bar(stat = ""identity"") + "
+"0","  labs(title = 'OsakaCity')"
+"0","plot(gOsakaCity)"

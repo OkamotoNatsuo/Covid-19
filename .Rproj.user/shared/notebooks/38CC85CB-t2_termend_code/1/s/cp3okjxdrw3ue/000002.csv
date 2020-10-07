@@ -1,0 +1,23 @@
+"0","library(jsonlite)"
+"2"," パッケージ ‘jsonlite’ はバージョン 4.0.2 の R の下で造られました "
+"2","
+ 次のパッケージを付け加えます: ‘jsonlite’ 
+
+"
+"2"," 以下のオブジェクトは ‘package:purrr’ からマスクされています: 
+
+     flatten 
+
+"
+"0","#東京都新型コロナウイルス感染症対策サイトのGitHubのサイトよりJson形式でダウンロード"
+"0","#https://github.com/tokyo-metropolitan-gov/covid19/blob/development/data/patient.json"
+"0","urlCovidTokyo <- ""https://raw.githubusercontent.com/tokyo-metropolitan-gov/covid19/development/data/patient.json"""
+"0","listTableCovid <- jsonlite::fromJSON(urlCovidTokyo)"
+"0",""
+"0","#リスト内のデータフレームを抽出"
+"0","#ドル記号を使ってリスト内の要素にアクセスします．"
+"0","dfTokyoCovid <- listTableCovid$datasets$data"
+"0",""
+"0",""
+"0",""
+"0",""

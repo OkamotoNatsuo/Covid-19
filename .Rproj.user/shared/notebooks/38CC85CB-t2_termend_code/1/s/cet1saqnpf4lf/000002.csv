@@ -1,0 +1,6 @@
+"0","dfTokyo <- fAggregateShapefile(13)"
+"2","`summarise()` ungrouping output (override with `.groups` argument)
+"
+"0","dfOsaka <- fAggregateShapefile(27)"
+"2","`summarise()` ungrouping output (override with `.groups` argument)
+"

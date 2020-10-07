@@ -1,0 +1,2 @@
+"0","Tokyo <- margin_data(dfTokyo,dfTokyoCovid)"
+"0","Osaka <- margin_data(dfOsaka,dfOsakaCovid)"

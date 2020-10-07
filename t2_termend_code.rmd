@@ -1,0 +1,1085 @@
+---
+title: "応用計量分析1　期末課題　分析コード"
+author: "名前を記入"
+output: html_document
+---
+
+まず必要なライブラリーを読み込んでいく。
+
+```{r}
+#------------------------------------------------
+#必要なパッケージを読み込む
+#------------------------------------------------
+library(openxlsx)
+library(tidyverse)
+library(rvest)
+library(httr)
+library(sf)
+library(tmap)
+library(ggplot2)
+#緯度経度から距離を計算するパッケージ
+library(geosphere)
+#リスト操作
+library(rlist)
+```
+
+
+
+
+
+```{r}
+strDirName <- "data_estat"
+if (!dir.exists(strDirName)) {
+  dir.create(strDirName)
+}
+
+```
+
+
+
+#### シェイプファイルを取得する。
+今回は東京都と大阪府のシェイプファイを取得する。
+理由:8/27日現在、https://www3.nhk.or.jp/news/special/coronavirus/data/ サイトにて直近1週間の人口10万人あたりの感染者数が東京都、大阪府が2,3番目に多かったため。1番多い沖縄県に関しては本州から離れており、今回は普遍的なコロナ感染者の拡大の理由について考えたかったので沖縄県は省きました。
+```{r, eval=FALSE}
+#------------------------------------------------
+#シェープファイル取得
+#------------------------------------------------
+#チャンクオプションにeval=FALSEを追加
+
+
+
+#今回は東京都と大阪府のシェープファイルをダウンロードしたいのでlistPrefを以下と定義する。
+listPref <- list(13,27)
+
+
+#関数を作成
+#----- START: fDownloadShapefile() -----
+fDownloadShapefile <- function(x){
+  #DLメッセージ
+  print(paste0("Downloading shapefile of prefecture ", x, " from e-Stat..."))
+  
+  #ファイル名
+  filename <- paste0("data_estat/h27ka", x, ".zip")
+  
+  #e-Statからシェープファイルのダウンロード
+  urlBase <- "https://www.e-stat.go.jp/gis/statmap-search/data"
+  urlParam <-
+    paste0("?dlserveyId=A002005212015&code=",
+           x,
+           "&coordSys=1&format=shape&downloadType=5")
+  httr::GET(paste0(urlBase, urlParam), write_disk(filename, overwrite = TRUE))
+
+  #ZIPファイルを展開
+  #data_estatフォルダのZIPファイルを，同一フォルダ内に展開する
+  unzip(filename, exdir = "data_estat", overwrite = TRUE)
+}
+#----- END: fDownloadShapefile() -----
+
+#次のループを実行するまでの待機時間
+sleepSecond <- 5
+
+#For文de
+for (i in listPref) {
+  
+  #関数を実行する
+  fDownloadShapefile(i)  
+
+  #次のループまで待機
+  Sys.sleep(sleepSecond)
+}
+
+#ファイルがあるか確認
+dir("data_estat")
+
+
+```
+
+#### 次に東京都と大阪府の市区町村別の陽性患者数データのwebスクレイピングを行っていく。
+まず東京都のコロナ感染者データを取得する。
+```{r}
+library(jsonlite)
+
+#東京都新型コロナウイルス感染症対策サイトのGitHubのサイトよりJson形式でダウンロード
+#https://github.com/tokyo-metropolitan-gov/covid19/blob/development/data/patient.json
+urlCovidTokyo <- "https://raw.githubusercontent.com/tokyo-metropolitan-gov/covid19/development/data/patient.json"
+listTableCovid <- jsonlite::fromJSON(urlCovidTokyo)
+
+#リスト内のデータフレームを抽出
+#ドル記号を使ってリスト内の要素にアクセスします．
+dfTokyoCovid <- listTableCovid$datasets$data
+
+
+
+
+```
+
+
+
+```{r}
+strDirName <- "Covid"
+if (!dir.exists(strDirName)) {
+  dir.create(strDirName)
+}
+
+```
+
+
+次に大阪府のコロナ感染者データを取得する。大阪府のデータは個人でのデータであるので後に東京都のデータとは違う処理をする必要がある。
+```{r}
+filename = 'Covid/CovidOsaka.xlsx'
+urlCovidOsaka <- 'http://www.pref.osaka.lg.jp/attach/23711/00346644/youseisyajyouhou.xlsx'
+
+httr::GET(urlCovidOsaka, write_disk(filename, overwrite = TRUE))
+
+unzip(filename,exdir = 'Covid', overwrite = TRUE)
+
+dfOsakaCovid <- read.xlsx('Covid/CovidOsaka.xlsx',startRow = 2)
+```
+
+
+
+シィプファイルを加工するための関数を定義する。
+```{r}
+fAggregateShapefile <- function(x) {
+  #シェープファイルを読み込む
+  sf <- sf::read_sf(paste0("data_estat/h27ka", x, ".shp"))
+  
+  #一時作業用
+  #不要なポリゴンを削除
+  sfTemp <- sf %>%
+    dplyr::mutate(prefCode = as.numeric(PREF)) %>%
+    dplyr::mutate(prefName = as.character(PREF_NAME)) %>%
+    dplyr::mutate(cityCode = as.numeric(paste0(PREF, CITY))) %>%
+    dplyr::mutate(cityName = as.character(CITY_NAME)) %>%
+    dplyr::filter(HCODE != 8154) %>%
+    dplyr::select(KEY_CODE,prefCode, prefName, cityCode, cityName, JINKO, geometry)
+  
+  #例外処理
+  #東京都の島嶼を除く
+  #qgisを用いて大阪負を適切な範囲に絞る。
+  if(x == 13) {
+    sfTemp <- sfTemp %>%
+      dplyr::filter(cityCode > 13100 & cityCode < 13360)
+  } else if(x == 27) {
+    sfTemp <- sfTemp %>% 
+      dplyr::filter(KEY_CODE != 271131000) %>% 
+      dplyr::filter(KEY_CODE != 271041000) %>% 
+      dplyr::filter(KEY_CODE != 271071000) %>% 
+      dplyr::filter(KEY_CODE != 271081000) %>%     
+      dplyr::filter(KEY_CODE != 271419990) %>%       
+      dplyr::filter(KEY_CODE != 271449990) %>%
+      dplyr::filter(KEY_CODE != 272250130) %>% 
+      dplyr::filter(KEY_CODE != 272060560) %>%
+      dplyr::filter(KEY_CODE != 273410100) %>%
+      dplyr::filter(KEY_CODE != 272020200) %>%
+      dplyr::filter(KEY_CODE != 272080990)
+  }
+  
+  #ポリゴンを区市町村単位に集計
+  #大阪府のコロナ感染者のデータでは市までの情報しかなく、どこの区在住の方かわからないので東京都の処理と場合分けをする必要がある。
+  if(x == 13){
+    sfTempCity <- sfTemp %>%
+      dplyr::group_by(cityCode) %>% 
+      dplyr::summarise(
+      prefCode = first(prefCode),
+      prefName = first(prefName),
+      cityName = first(cityName),
+      pop = sum(JINKO)
+    ) 
+  } else if(x == 27){
+    #大阪市と堺市に属する区のcityNameを大阪市と堺市に変更する。
+    sfTempCity <- sfTemp %>%
+      dplyr::mutate(cityName = if_else((27101<cityCode)&(cityCode<27129),'大阪市',cityName)) %>%
+      dplyr::mutate(cityName = if_else((27140<cityCode)&(cityCode<27148),'堺市',cityName)) %>% 
+      dplyr::group_by(cityName) %>% 
+      dplyr::summarise(
+      prefCode = first(prefCode),
+      prefName = first(prefName),
+      cityName = first(cityName),
+      pop = sum(JINKO)
+    )
+ }
+    
+  #作成したデータフレームを返す
+  return(sfTempCity)
+}
+```
+
+
+
+
+今回はデータフレームを結合したくなかったので個々のデータに関数を用いる。
+```{r}
+dfTokyo <- fAggregateShapefile(13)
+dfOsaka <- fAggregateShapefile(27)
+```
+
+
+大阪府のコロナ感染者データは市区町村別感染者データではなく、個人のデータであるので市区町村別のデータになるように加工していく。
+```{r}
+dfOsakaCovid<- dfOsakaCovid %>% 
+  dplyr::mutate(count = 1) %>% 
+  dplyr::rename(label = 居住地) %>% 
+  dplyr::group_by(label) %>% 
+  dplyr::summarise(count = sum(count))
+```
+
+
+東京都と大阪府のそれぞれのシェイプファイルをそれぞれのコロナ感染者データに結合し、また居住者人口10万人あたりの陽性患者数（累計）にあたるpatients_100000を作成する関数を定義する。
+```{r}
+margin_data <- function(shapefile,covid_data){
+  shape_margin <- shapefile %>% 
+    dplyr::left_join(covid_data %>% 
+                       dplyr::select(label,count)
+                     ,by = c('cityName' = 'label')) %>% 
+    dplyr::mutate(patients_100000 = (count/pop)*100000)
+  
+  return(shape_margin)
+}
+
+
+```
+
+```{r}
+Tokyo <- margin_data(dfTokyo,dfTokyoCovid)
+Osaka <- margin_data(dfOsaka,dfOsakaCovid)
+```
+
+東京都区市町村別の（1）新型コロナウイルスの陽性患者数（累計）を描写する.(8/27)
+```{r visualize_map1}
+#インタラクティブな地図
+tmap_mode('plot')
+tm_shape(Tokyo) +
+  tm_borders(col = "white") +
+  tm_fill(id = 'cityName',
+    col = "count",
+    style = "quantile",
+    palette = "BuGn",
+    n = 6,
+    alpha = 0.7
+  )
+
+```
+
+東京都区市町村別の（2）居住者人口10万人あたりの陽性患者数（累計）を描写する。(8/27)
+
+
+```{r visualize_map2}
+#インタラクティブな地図
+tmap_mode('plot')
+tm_shape(Tokyo) +
+  tm_borders(col = "white") +
+  tm_fill(id = 'cityName',
+    col = "patients_100000",
+    style = "quantile",
+    palette = "BuGn",
+    n = 6,
+    alpha = 0.7
+  )
+```
+
+大阪府市町村別の（1）新型コロナウイルスの陽性患者数（累計）を描写する.(8/27)
+
+```{r visualize_map3}
+#インタラクティブな地図
+tmap_mode('plot')
+tm_shape(Osaka) +
+  tm_borders(col = "white") +
+  tm_fill(id = 'cityName',
+    col = "count",
+    style = "quantile",
+    palette = "BuGn",
+    n = 6,
+    alpha = 0.7
+  )
+```
+
+
+
+大阪府市町村別の（2）居住者人口10万人あたりの陽性患者数（累計）を描写する。(8/27)
+
+```{r visualize_map4}
+#インタラクティブな地図
+tmap_mode('plot')
+tm_shape(Osaka) +
+  tm_borders(col = "white") +
+  tm_fill(id = 'cityName',
+    col = "patients_100000",
+    style = "quantile",
+    palette = "BuGn",
+    n = 6,
+    alpha = 0.7
+  )
+```
+
+#### 宿泊業，飲食サービス業と生活関連サービス業，娯楽業についてのHotSpot分析を行っていく。
+
+```{r}
+#------------------------------------------------
+#コード全体の初期設定
+#------------------------------------------------
+
+#保存先フォルダの作成
+strDirName1 <- "data_estat_mesh500m"
+if (!dir.exists(strDirName1)) {
+  dir.create(strDirName1)
+}
+
+#Mesh Code: 5338と5339は東京都の範囲
+#Mesh Code: 5135と5235は東京都の範囲
+listMeshCode <- list(5338, 5339,5135,5235)
+```
+
+
+```{r,eval = FALSE}
+#------------------------------------------------
+#メッシュ境界データ取得
+#------------------------------------------------
+#チャンクオプションにeval=FALSEを追加
+#初めての時のみ実行すれば良い
+
+#関数を作成
+#----- START: fDownloadMeshShapefile() -----
+fDownloadMeshShapefile <- function(x){
+  #DLメッセージ
+  print(paste0("Downloading shapefile of mesh code ", x, " from e-Stat..."))
+
+  #URL設定
+  url <- "https://www.e-stat.go.jp/gis/statmap-search/data"
+  param <- paste0("?dlserveyId=H&code=", x, "&coordSys=1&format=shape&downloadType=5")
+
+  #保存ファイル名
+  filename <- paste0("MESH_code", x, "_shape.zip")
+  
+  #ダウンロード
+  GET(paste0(url, param), write_disk(paste0("data_estat_mesh500m/", filename), overwrite = TRUE))
+  
+  #ZIPファイルを解凍
+  unzip(paste0("data_estat_mesh500m/", filename), exdir = "data_estat_mesh500m")
+}
+#----- END: fDownloadMeshShapefile() -----
+
+#Web APIの次の命令の待機時間を設定
+#サーバー負荷を避けるため
+sleepSecond <- 5
+
+#Forループでメッシュ統計データをダウンロードする
+for (i in listMeshCode) {
+  #関数の実行
+  fDownloadMeshShapefile(i)  
+
+  #次のループの待機
+  Sys.sleep(sleepSecond)
+}
+
+```
+
+
+```{r,eval = FALSE}
+#------------------------------------------------
+#メッシュ統計データを取得
+#------------------------------------------------
+#チャンクオプションにeval=FALSEを追加
+#初めての時のみ実行すれば良い
+
+
+#関数を作成
+#----- START: fDownloadMeshStats() -----
+fDownloadMeshStats <- function(x){
+  #DLメッセージ
+  print(paste0("Downloading data of mesh code ", x, " from e-Stat..."))
+
+  #URL設定
+  url <- "https://www.e-stat.go.jp/gis/statmap-search/data"
+  param <- paste0("?statsId=T000918&code=", x, "&downloadType=2")
+
+  #保存ファイル名
+  filename <- paste0("MESH_code", x, "_data_econ_census_2016.zip")
+  
+  #ダウンロード
+  GET(paste0(url, param), write_disk(paste0("data_estat_mesh500m/", filename), overwrite = TRUE))
+  
+  #ZIPファイルを解凍
+  unzip(paste0("data_estat_mesh500m/", filename), exdir = "data_estat_mesh500m")
+}
+#----- END: fDownloadMeshStats() -----
+
+#Web APIの次の命令の待機時間を設定
+#サーバー負荷を避けるため
+sleepSecond <- 5
+
+#Forループでメッシュ統計データをダウンロードする
+for (i in listMeshCode) {
+
+  #関数を実行
+  fDownloadMeshStats(i)  
+  
+  #次のループの待機
+  Sys.sleep(sleepSecond)
+}
+
+```
+
+
+
+メッシュ統計データを結合していく。今回は宿泊業，飲食サービス業と生活関連サービス業，娯楽業についてhotspot分析を行っていく。
+```{r}
+#------------------------------------------------
+#メッシュ統計データの統合
+#------------------------------------------------
+
+#関数を作成
+#----- START: fLoadMeshStats() -----
+fLoadMeshStats <- function(x){
+
+  #文字コードを指定しないと文字化けする
+  filename <- paste0("tblT000918H", x, ".txt")
+
+  #文字コードを指定しないと文字化けする
+  dfTemp <- readr::read_csv(paste0("data_estat_mesh500m/", filename), 
+                                locale=readr::locale(encoding = "CP932")) %>%
+    dplyr::slice(-1)
+
+  #文字コードを指定しないと文字化けする
+  return(dfTemp)
+}
+#----- END: fLoadMeshStats() -----
+
+#指定したメッシュ境界データを一括で読み込む
+listMeshTokyo <- lapply(listMeshCode[1:2], fLoadMeshStats)
+listMeshOsaka <- lapply(listMeshCode[3:4], fLoadMeshStats)
+
+
+#関数を作成する。
+#2つのデータフレームを行方向に統合
+#dplyr::select()で必要な変数のみを残す
+#totalEstbとして宿泊業，飲食サービス業の事業所数の変数作成
+#totalAmuseとして生活関連サービス業，娯楽業の事業所数の変数作成
+#人がいない区域や非表示の区域はNAとして変換
+marginMesh <- function(listMeshStats){
+dfMesh <- dplyr::bind_rows(listMeshStats) %>%
+  dplyr::select(KEY_CODE, T000918014,T000918015) %>%
+  dplyr::mutate(KEY_CODE = as.character(KEY_CODE)) %>%
+  dplyr::mutate(totalEstb = na_if(T000918014, "-")) %>%
+  dplyr::mutate(totalEstb = na_if(T000918014, "*")) %>%
+  dplyr::mutate(totalEstb = as.numeric(totalEstb)) %>% 
+  dplyr::mutate(totalAmuse = na_if(T000918015, "-")) %>%
+  dplyr::mutate(totalAmuse = na_if(T000918015, "*")) %>%
+  dplyr::mutate(totalAmuse = as.numeric(totalAmuse)) %>% 
+  #NAをゼロに変更
+  dplyr::mutate(totalEstb = if_else(is.na(totalEstb), 0, totalEstb)) %>%
+  dplyr::mutate(totalAmuse = if_else(is.na(totalAmuse), 0, totalAmuse)) %>%
+
+  dplyr::distinct(KEY_CODE, .keep_all = TRUE)
+  return(dfMesh)
+}
+
+
+dfMeshTokyo <- marginMesh(listMeshTokyo)
+dfMeshOsaka <- marginMesh(listMeshOsaka)
+```
+
+
+
+
+メッシュ境界データの統合
+```{r}
+#------------------------------------------------
+#メッシュ境界データの統合
+#------------------------------------------------
+
+#関数を作成
+#----- START: fLoadMeshShapefile() -----
+fLoadMeshShapefile <- function(x){
+  #ファイル名
+  filename <- paste0("MESH0", x, ".shp")
+  #データを読み込む
+  sfTemp <- sf::read_sf(paste0("data_estat_mesh500m/", filename), options = "ENCODING=cp932")
+  #データを返す
+  return(sfTemp)
+}
+#----- END: fLoadMeshShapefile() -----
+
+#データを読み込む
+listMeshTokyosf <- lapply(listMeshCode[1:2], fLoadMeshShapefile)
+listMeshOsakasf <- lapply(listMeshCode[3:4], fLoadMeshShapefile)
+sfMeshTokyo <- dplyr::bind_rows(listMeshTokyosf)
+sfMeshOsaka <- dplyr::bind_rows(listMeshOsakasf)
+
+```
+
+メッシュ境界データを東京都の範囲で切り抜く
+
+```{r}
+#東京都と大阪府ののメッシュ地図のみ抽出する関数を定義する
+#sfパッケージのst_intersectionで両シェープファイルの重なる部分を抽出
+meshExtraction <- function(sfMesh,sfCity){
+  sfMeshClip <- sf::st_intersection(sfMesh, sfCity)
+  
+  #対象地域のメッシュコードを抽出する
+  dfCommon <- tibble::tibble(KEY_CODE = sfMeshClip$KEY_CODE)
+  
+  #対象メッシュの地域のみを残す
+  sfMeshClip <- dplyr::inner_join(sfMesh, dfCommon, by = "KEY_CODE") %>%
+    dplyr::distinct(KEY_CODE, .keep_all = TRUE)
+  return(sfMeshClip)
+}
+
+sfMeshClipTokyo <- meshExtraction(sfMeshTokyo,dfTokyo)
+sfMeshClipOsaka <- meshExtraction(sfMeshOsaka,dfOsaka)
+```
+
+
+
+```{r}
+#メッシュ境界データにデータを結合する関数を定義する。
+
+#メッシュ境界データにメッシュ統計データを統合
+meshMargin <- function(dfMesh,sfMeshClip){
+  sfMeshClipData <- sfMeshClip %>%
+    dplyr::left_join(dfMesh, by = "KEY_CODE") %>%
+    dplyr::distinct(KEY_CODE, .keep_all = TRUE)　 %>% 
+  #人口総数がNAのデータを0に変更する
+    dplyr::mutate(totalEstb = if_else(is.na(totalEstb), 0, totalEstb)) %>% 
+    dplyr::mutate(totalAmuse = if_else(is.na(totalAmuse),0,totalAmuse))
+  return(sfMeshClipData)
+}
+sfMeshClipDataTokyo <- meshMargin(dfMeshTokyo,sfMeshClipTokyo)
+sfMeshClipDataOsaka <- meshMargin(dfMeshOsaka,sfMeshClipOsaka)
+```
+
+
+距離行列から空間重み行列を作成する
+```{r}
+#距離行列から空間重み行列を作成する関数を定義する。
+create_mDist <- function(sfMeshClipData){
+  #st_centroid()で重心の緯度経度を取得
+  sfMeshCntrd <- sf::st_centroid(sfMeshClipData)
+  
+  
+  #メッシュの重心の緯度・経度追加
+  sfMeshClipData <- sfMeshClipData %>%
+    dplyr::mutate(lon = unlist(purrr::map(sfMeshCntrd$geometry, 1))) %>%
+    dplyr::mutate(lat = unlist(purrr::map(sfMeshCntrd$geometry, 2)))
+  
+  #距離行列を作成
+  #geosphereパッケージのdistmで距離行列を作成
+  mDist <- geosphere::distm(cbind(sfMeshClipData$lon, sfMeshClipData$lat))
+  
+  #対角要素を1に設定
+  diag(mDist) <- 1L
+  #1000m未満であれば局所和の集計対象とする(距離行列を定義)
+  mDist[mDist<1000] <- 1L
+  mDist[mDist>=1000] <- 0L
+  
+  #距離行列より半径1km以内の地域を局所集合として扱う
+  #行和標準化しないため，style = "B"とする
+  #mat2listwより空間重み行列の作成
+  swmDist <- spdep::mat2listw(mDist, style = "B")
+  return(swmDist)
+}
+
+swmDistTokyo <- create_mDist(sfMeshClipDataTokyo)
+swmDistOsaka <- create_mDist(sfMeshClipDataOsaka)
+```
+
+Getis-Ord G*i(d)の計算
+宿泊業，飲食サービス業と生活関連サービス業，娯楽業についてそれぞれ行う
+```{r}
+#Getis-Ord Gの計算
+sfMeshClipDataTokyo <- sfMeshClipDataTokyo %>%
+  dplyr::mutate(getisordEstb = spdep::localG(totalEstb, swmDistTokyo))　 %>% 
+  dplyr::mutate(getisordAmuse = spdep::localG(totalAmuse,swmDistTokyo))
+sfMeshClipDataOsaka <- sfMeshClipDataOsaka %>%
+  dplyr::mutate(getisordEstb = spdep::localG(totalEstb, swmDistOsaka)) %>% 
+  dplyr::mutate(getisordAmuse = spdep::localG(totalAmuse,swmDistOsaka))
+
+```
+
+
+
+東京都の地図の可視化(宿泊業，飲食サービス業について)
+先程の東京都区市町村別の（2）居住者人口10万人あたりの陽性患者数（累計）も同時に描写する
+
+```{r visualize_map5}
+#画像出力
+tmap_mode("view")
+#地図による可視化
+#インタラクティブな地図
+
+  
+tm_shape(sfMeshClipDataTokyo) +
+  tm_basemap("OpenStreetMap.Mapnik") +
+  tm_borders(lwd = 0.2) +
+  tm_fill("getisordEstb",
+          lwd = 0,
+          midpoint = 0,
+          palette = "-RdBu",
+          alpha = 0.6,
+          title = "Getis-Ord G*i(d)",
+          breaks = c(-Inf, -2.58, -1.96, 1.96, 2.58, Inf)) +
+  tm_shape(dfTokyo) +
+  tm_borders() +
+  tm_layout(fontfamily = "sans") +
+  
+  tm_shape(Tokyo) +
+  tm_borders(col = "white") +
+  tm_fill(id = 'cityName',
+    col = "patients_100000",
+    style = "quantile",
+    palette = "BuGn",
+    n = 6,
+    alpha = 0.5
+  ) 
+  
+```
+
+
+
+東京都の地図の可視化(生活関連サービス業，娯楽業について)
+先程の東京都区市町村別の（2）居住者人口10万人あたりの陽性患者数（累計）も同時に描写する
+```{r visualize_map6}
+#画像出力
+tmap_mode("view")
+
+#地図による可視化
+tm_shape(sfMeshClipDataTokyo) +
+  tm_basemap("OpenStreetMap.Mapnik") +
+  tm_borders(lwd = 0.2) +
+  tm_fill("getisordAmuse",
+          lwd = 0,
+          midpoint = 0,
+          palette = "-RdBu",
+          alpha = 0.6,
+          title = "Getis-Ord G*i(d)",
+          breaks = c(-Inf, -2.58, -1.96, 1.96, 2.58, Inf)) +
+  tm_shape(dfTokyo) +
+  tm_borders() +
+  tm_layout(fontfamily = "sans") + 
+  
+  tm_shape(Tokyo) +
+  tm_borders(col = "white") +
+  tm_fill(id = 'cityName',
+    col = "patients_100000",
+    style = "quantile",
+    palette = "BuGn",
+    n = 6,
+    alpha = 0.5
+  ) 
+```
+
+大阪府の地図の可視化(宿泊業，飲食サービス業について)
+大阪府市町村別の（2）居住者人口10万人あたりの陽性患者数（累計）も同時に描写する。
+```{r visualize_map7} 
+
+
+#画像出力
+tmap_mode("view")
+
+#地図による可視化
+tm_shape(sfMeshClipDataOsaka) +
+  tm_basemap("OpenStreetMap.Mapnik") +
+  tm_borders(lwd = 0.2) +
+  tm_fill("getisordEstb",
+          lwd = 0,
+          midpoint = 0,
+          palette = "-RdBu",
+          alpha = 0.6,
+          title = "Getis-Ord G*i(d)",
+          breaks = c(-Inf, -2.58, -1.96, 1.96, 2.58, Inf)) +
+  tm_shape(dfOsaka) +
+  tm_borders() +
+  tm_layout(fontfamily = "sans") + 
+  
+  tm_shape(Osaka) +
+    tm_borders(col = "white") +
+    tm_fill(id = 'cityName',
+      col = "patients_100000",
+      style = "quantile",
+      palette = "BuGn",
+      n = 6,
+      alpha = 0.5
+    )
+```
+
+
+
+大阪府の地図の可視化(生活関連サービス業，娯楽業について)
+大阪府市町村別の（2）居住者人口10万人あたりの陽性患者数（累計）も同時に描写する。
+
+```{r visualize_map8}
+
+
+#画像出力
+tmap_mode("view")
+
+#地図による可視化
+tm_shape(sfMeshClipDataOsaka) +
+  tm_basemap("OpenStreetMap.Mapnik") +
+  tm_borders(lwd = 0.2) +
+  tm_fill("getisordAmuse",
+          lwd = 0,
+          midpoint = 0,
+          palette = "-RdBu",
+          alpha = 0.6,
+          title = "Getis-Ord G*i(d)",
+          breaks = c(-Inf, -2.58, -1.96, 1.96, 2.58, Inf)) +
+  tm_shape(dfOsaka) +
+  tm_borders() +
+  tm_layout(fontfamily = "sans") + 
+  
+  tm_shape(Osaka) +
+    tm_borders(col = "white") +
+    tm_fill(id = 'cityName',
+      col = "patients_100000",
+      style = "quantile",
+      palette = "BuGn",
+      n = 6,
+      alpha = 0.5
+    )
+```
+
+
+
+
+以上の地図からところどころクラスターになっているところは存在するが、宿泊業，飲食サービス業や生活関連サービス業，娯楽業においてどちらの地図でも東京都では主に渋谷区、港区、新宿区、千代田区、中央区、台東区が挙げられ、大阪府では大阪市が挙げられる。<br>
+上記で挙げた市区町村は居住者人口10万人あたりの陽性患者数を描写した際も割合が比較的多い市区町村である。このことから宿泊業，飲食サービス業や生活関連サービス業，娯楽業が多い地域ではコロナ感染者数が多いと言えそうである。だがその逆は特に大阪府の地図を見ると常に成り立つとは言えなそうである。そのためコロナウイルス感染拡大の説明として絶対的とは言えないが、一つの要素として宿泊業，飲食サービス業や生活関連サービス業，娯楽業が密集している地域ではコロナウイルスの感染拡大が起きたと言えるのではないか。<br>
+
+以下では滞在先が渋谷区、港区、新宿区、千代田区、中央区、台東区、大阪市のそれぞれの年齢別の移動人数を取得し棒グラフとして表示する。
+
+まずRESAS-APIから移動データを取得する関数を定義する。
+```{r}
+#------------------------------------------------
+#RESAS-APIよりデータダウンロード
+#------------------------------------------------
+#Web APIの使用はRESAS APIのウェブページを確認
+
+
+apiKey <- 'QfQSjugOnB3K5yplJYbyzId7EEtTbEr5WEOoENWF'
+
+
+download_resas <- function(prefCodeDestination,cityCodeDestination){
+    #API Endpoint
+    urlBase <- "https://opendata.resas-portal.go.jp/"
+    #項目識別用URI
+    urlItem <- "api/v1/partner/docomo/destination"
+    #パラメータ値
+    urlParam <- paste0("?year=2016&month=04&periodOfDay=1&periodOfTime=20&gender=-&ageRange=-")
+    #滞在先の市区町村コード
+    urlParamDestination <-
+      paste0("&prefCodeDestination=", prefCodeDestination, "&cityCodeDestination=", cityCodeDestination)
+    #居住先の市区町村コード
+    urlParamResidence <- paste0("&prefCodeResidence=",prefCodeDestination,"&cityCodeResidence=-")
+    
+    #httrパッケージのGET()よりJSONデータを取得
+    #add_headers()にAPIキーを追加する必要あり
+    getJson <-
+      httr::GET(
+        paste0(urlBase, urlItem, urlParam, urlParamDestination, urlParamResidence),
+        add_headers("X-API-KEY" = apiKey)
+      )
+    
+    #JSON形式のデータを見る場合は，content()コマンドを利用
+    listGetJson <- content(getJson)
+  return(listGetJson)
+}
+
+
+```
+
+RESAS-APIよりダウンロードしたデータからデータフレーム作成する関数を定義する。
+```{r}
+#居住先（都道府県コード・都道府県名）
+resas_dataframe <- function(listGetJson){
+  #居住先（都道府県コード・都道府県名）
+  prefCodeResidence <- as.numeric(listGetJson$result$prefs[[1]]$prefCode)
+  prefNameResidence <- as.character(listGetJson$result$prefs[[1]]$prefName)
+  #居住先（市区町村コード・市区町村名）
+  cityCodeResidence <- as.numeric(lapply(listGetJson$result$prefs[[1]]$cities,function(x){c(x$cityCode)}))
+  cityNameResidence <- as.character(lapply(listGetJson$result$prefs[[1]]$cities,function(x){c(x$cityName)}))
+  #人数の総数
+  total <- as.numeric(lapply(listGetJson$result$prefs[[1]]$cities, function(x) {c(x$total)}))  
+  
+  dfFromTo <- tibble::tibble(
+    cityCodeDestination,
+    cityNameDestination,
+    prefCodeResidence,
+    prefNameResidence,
+    cityCodeResidence,
+    cityNameResidence,
+    total)
+    
+    #以下のコードで年齢ごとの移動人数を加えたデータフレームを作成する
+    #男女別の年齢ごとの移動人数が0の市区町村の場合、jsoncodeは定義されてなく移動人数が0となっていないので、for文を回したときにエラーが発生する。これを防ぐためにエラー処理を行っていく。
+  error_code <- function(i,j,k){
+    as.numeric(listGetJson$result$prefs[[1]]$cities
+                               [[i]]$genders[[j]]$ageRanges[[k]]$value)
+  }
+  gender_ages <- c()
+
+  for(j in 1:2){
+    for (k in 1:7){
+      for (i in 1:length(listGetJson$result$prefs[[1]]$cities)){
+        #エラーが起きた場合はgender_ageを0とする。
+        gender_age <- try(error_code(i,j,k) ,silent = TRUE)
+        if (class(gender_age) == 'try-error'){
+          gender_age <- 0
+    }#それぞれの市区町村ごとの男女別かつ年齢語の戸移動データをgender_agesに加えていく。
+        gender_ages <- append(gender_ages,gender_age)
+    
+        if (length(gender_ages) == length(listGetJson$result$prefs[[1]]$cities)){
+          #dfFromToにgender{1 or 2}age{1 or 2 or 3 or 4 or 5 or 6 or 7}データを加えていく。
+          dfFromTo <- dfFromTo %>% 
+            dplyr::mutate(!!paste0('gender',j,'age',k) := gender_ages)
+          gender_ages <- c()
+      }
+    }
+  }  
+}
+
+  #同じ年齢層の男女の移動データを合計していく。
+  dfFromTo <- dfFromTo %>% 
+    dplyr::mutate(age15 = gender1age1 + gender2age1) %>% 
+    dplyr::mutate(age20 = gender1age2 + gender2age2) %>% 
+    dplyr::mutate(age30 = gender1age3 + gender2age3) %>% 
+    dplyr::mutate(age40 = gender1age4 + gender2age4) %>% 
+    dplyr::mutate(age50 = gender1age5 + gender2age5) %>% 
+    dplyr::mutate(age60 = gender1age6 + gender2age6) %>% 
+    dplyr::mutate(age70 = gender1age7 + gender2age7) %>% 
+    dplyr::select(cityCodeDestination,
+    cityNameDestination,
+    prefCodeResidence,
+    prefNameResidence,
+    cityCodeResidence,
+    cityNameResidence,
+    total,
+    age15,
+    age20,
+    age30,
+    age40,
+    age50,
+    age60,
+    age70)
+  
+    
+  return(dfFromTo)
+}
+```
+
+
+滞在先が千代田区のデータフレームを作成
+```{r}
+#滞在先（都道府県コード・都道府県名）
+prefCodeDestinationTokyo <- 13
+prefNameDestinationTokyo <- "東京都"
+#滞在先（市区町村コード・市区町村名）
+cityCodeDestination <- 13101
+cityNameDestination <- "千代田区"
+Chiyoda <- download_resas(prefCodeDestinationTokyo,cityCodeDestination)
+Chiyoda <- resas_dataframe(Chiyoda)
+```
+
+```{r}
+dataChiyoda <- tibble(count = apply(Chiyoda[7:14],2,sum),ages = c('all',"age15","age20","age30","age40","age50","age60","age70"))
+gChiyoda <- ggplot(dataChiyoda[c(2:8),], aes(x = ages, y = count))+ 
+  geom_bar(stat = "identity") +
+  labs(title = 'Chiyoda')
+```
+
+
+
+
+滞在先が中央区のデータフレームを作成
+```{r}
+#滞在先（都道府県コード・都道府県名）
+prefCodeDestinationTokyo <- 13
+prefNameDestinationTokyo <- "東京都"
+#滞在先（市区町村コード・市区町村名）
+cityCodeDestination <- 13102
+cityNameDestination <- "中央区"
+Tyuou <- download_resas(prefCodeDestinationTokyo,cityCodeDestination)
+Tyuou <- resas_dataframe(Tyuou)
+```
+
+```{r}
+dataTyuou <- tibble(count = apply(Tyuou[7:14],2,sum),ages = c('all',"age15","age20","age30","age40","age50","age60","age70"))
+gTyuou <- ggplot(dataTyuou[c(2:8),], aes(x = ages, y = count))+ 
+  geom_bar(stat = "identity") +
+  labs(title = 'Tyuou')
+```
+
+
+
+滞在先が港区のデータフレームを作成
+```{r}
+#滞在先（都道府県コード・都道府県名）
+prefCodeDestinationTokyo <- 13
+prefNameDestinationTokyo <- "東京都"
+#滞在先（市区町村コード・市区町村名）
+cityCodeDestination <- 13103
+cityNameDestination <- "港区"
+Minato <- download_resas(prefCodeDestinationTokyo,cityCodeDestination)
+Minato <- resas_dataframe(Minato)
+```
+
+
+```{r}
+dataMinato <- tibble(count = apply(Minato[7:14],2,sum),ages = c('all',"age15","age20","age30","age40","age50","age60","age70"))
+gMinato <- ggplot(dataMinato[c(2:8),], aes(x = ages, y = count))+ 
+  geom_bar(stat = "identity") + 
+  labs(title = 'Minato')
+```
+
+
+滞在先が新宿区のデータフレームを作成
+```{r}
+#滞在先（都道府県コード・都道府県名）
+prefCodeDestinationTokyo <- 13
+prefNameDestinationTokyo <- "東京都"
+#滞在先（市区町村コード・市区町村名）
+cityCodeDestination <- 13104
+cityNameDestination <- "新宿区"
+Shinjuku <- download_resas(prefCodeDestinationTokyo,cityCodeDestination)
+Shinjuku <- resas_dataframe(Shinjuku)
+```
+
+
+```{r}
+dataShinjuku <- tibble(count = apply(Shinjuku[7:14],2,sum),ages = c('all',"age15","age20","age30","age40","age50","age60","age70"))
+gShinjuku <- ggplot(dataShinjuku[c(2:8),], aes(x = ages, y = count))+ 
+  geom_bar(stat = "identity") +
+  labs(title = 'Shinjuku')
+```
+
+
+
+滞在先が台東区のデータフレームを作成
+```{r}
+#滞在先（都道府県コード・都道府県名）
+prefCodeDestinationTokyo <- 13
+prefNameDestinationTokyo <- "東京都"
+#滞在先（市区町村コード・市区町村名）
+cityCodeDestination <- 13106
+cityNameDestination <- "台東区"
+Taitou <- download_resas(prefCodeDestinationTokyo,cityCodeDestination)
+Taitou <- resas_dataframe(Taitou)
+```
+
+```{r}
+dataTaitou <- tibble(count = apply(Taitou[7:14],2,sum),ages = c('all',"age15","age20","age30","age40","age50","age60","age70"))
+gTaitou <- ggplot(dataTaitou[c(2:8),], aes(x = ages, y = count))+ 
+  geom_bar(stat = "identity") + 
+  labs(title = 'Taitou')
+```
+
+
+滞在先が渋谷区のデータフレームを作成
+```{r}
+#滞在先（都道府県コード・都道府県名）
+prefCodeDestinationTokyo <- 13
+prefNameDestinationTokyo <- "東京都"
+#滞在先（市区町村コード・市区町村名）
+cityCodeDestination <- 13113
+cityNameDestination <- "渋谷区"
+Shibuya <- download_resas(prefCodeDestinationTokyo,cityCodeDestination)
+Shibuya <- resas_dataframe(Shibuya)
+
+```
+
+
+
+```{r}
+dataShibuya <- tibble(count = apply(Shibuya[7:14],2,sum),ages = c('all',"age15","age20","age30","age40","age50","age60","age70"))
+gShibuya <- ggplot(dataShibuya[c(2:8),], aes(x = ages, y = count))+ 
+  geom_bar(stat = "identity") + 
+  labs(title = 'Shibuya')
+```
+
+
+```{r visualize_map9}
+gridExtra::grid.arrange(gChiyoda,gTyuou,gMinato,gShinjuku,gTaitou,gShibuya)
+
+```
+
+
+
+大阪市の移動データを入手する際にdownload_resas関数を少し修正する。
+大阪市は区ごとのデータしか入手できないのでlapplyをもちいて一括にダウンロードできるようにする。
+```{r}
+#------------------------------------------------
+#RESAS-APIよりデータダウンロード
+#------------------------------------------------
+#Web APIの使用はRESAS APIのウェブページを確認
+
+
+apiKey <- 'QfQSjugOnB3K5yplJYbyzId7EEtTbEr5WEOoENWF'
+
+
+download_resasOsaka <- function(cityCodeDestination){
+    #API Endpoint
+    urlBase <- "https://opendata.resas-portal.go.jp/"
+    #項目識別用URI
+    urlItem <- "api/v1/partner/docomo/destination"
+    #パラメータ値
+    urlParam <- paste0("?year=2016&month=04&periodOfDay=1&periodOfTime=20&gender=-&ageRange=-")
+    #滞在先の市区町村コード
+    urlParamDestination <-
+      paste0("&prefCodeDestination=", str_sub(cityCodeDestination,1,2), "&cityCodeDestination=", cityCodeDestination)
+    #居住先の市区町村コード
+    urlParamResidence <- paste0("&prefCodeResidence=",str_sub(cityCodeDestination,1,2),"&cityCodeResidence=-")
+    
+    #httrパッケージのGET()よりJSONデータを取得
+    #add_headers()にAPIキーを追加する必要あり
+    getJson <-
+      httr::GET(
+        paste0(urlBase, urlItem, urlParam, urlParamDestination, urlParamResidence),
+        add_headers("X-API-KEY" = apiKey)
+      )
+    
+    #JSON形式のデータを見る場合は，content()コマンドを利用
+    listGetJson <- content(getJson)
+    Sys.sleep(3)
+  return(listGetJson)
+}
+
+
+```
+
+
+
+
+滞在先が大阪市の区であるJsondataを一括ダウンロードする。
+```{r}
+#滞在先（都道府県コード・都道府県名）
+prefCodeDestinationTokyo <- 27
+prefNameDestinationTokyo <- "大阪府"
+#滞在先（市区町村コード・市区町村名）
+cityCodeDestination <- 27124
+cityNameDestination <- "大阪市"
+Osakalist <- list(27102, 27103, 27104, 27106, 27107, 27108, 27109, 27111,27113, 27114, 27115,27116, 27117, 27118, 27119, 27120, 27121, 27122, 27123, 27124, 27125, 27126, 27127, 27128)
+OsakaCity <- lapply(Osakalist,download_resasOsaka)
+
+```
+
+```{r}
+OsakaCity <- lapply(OsakaCity,resas_dataframe)#リスト内にそれぞれのtibbleデータがある
+```
+
+
+リスト内のデータを結合する
+```{r}
+OsakaCity <- OsakaCity %>% 
+  dplyr::bind_rows(OsakaCity)
+```
+
+
+
+
+```{r visualize_map10}
+dataOsakaCity <- tibble(count = apply(OsakaCity[7:14],2,sum),ages = c('all',"age15","age20","age30","age40","age50","age60","age70"))
+gOsakaCity <- ggplot(dataShibuya[c(2:8),], aes(x = ages, y = count))+ 
+  geom_bar(stat = "identity") + 
+  labs(title = 'OsakaCity')
+plot(gOsakaCity)
+```
+

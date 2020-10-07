@@ -1,0 +1,7 @@
+"0","dfOsakaCovid<- dfOsakaCovid %>% "
+"0","  dplyr::mutate(count = 1) %>% "
+"0","  dplyr::rename(label = 居住地) %>% "
+"0","  dplyr::group_by(label) %>% "
+"0","  dplyr::summarise(count = sum(count))"
+"2","`summarise()` ungrouping output (override with `.groups` argument)
+"

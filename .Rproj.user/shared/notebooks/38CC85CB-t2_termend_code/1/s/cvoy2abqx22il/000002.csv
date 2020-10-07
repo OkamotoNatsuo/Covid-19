@@ -1,0 +1,5 @@
+"0","strDirName <- ""Covid"""
+"0","if (!dir.exists(strDirName)) {"
+"0","  dir.create(strDirName)"
+"0","}"
+"0",""

@@ -1,0 +1,83 @@
+"0","#------------------------------------------------"
+"0","#メッシュ統計データの統合"
+"0","#------------------------------------------------"
+"0",""
+"0","#関数を作成"
+"0","#----- START: fLoadMeshStats() -----"
+"0","fLoadMeshStats <- function(x){"
+"0",""
+"0","  #文字コードを指定しないと文字化けする"
+"0","  filename <- paste0(""tblT000918H"", x, "".txt"")"
+"0",""
+"0","  #文字コードを指定しないと文字化けする"
+"0","  dfTemp <- readr::read_csv(paste0(""data_estat_mesh500m/"", filename), "
+"0","                                locale=readr::locale(encoding = ""CP932"")) %>%"
+"0","    dplyr::slice(-1)"
+"0",""
+"0","  #文字コードを指定しないと文字化けする"
+"0","  return(dfTemp)"
+"0","}"
+"0","#----- END: fLoadMeshStats() -----"
+"0",""
+"0","#指定したメッシュ境界データを一括で読み込む"
+"0","listMeshTokyo <- lapply(listMeshCode[1:2], fLoadMeshStats)"
+"2","Parsed with column specification:
+cols(
+  .default = col_character(),
+  KEY_CODE = [32mcol_double()[39m
+)
+"
+"2","See spec(...) for full column specifications.
+"
+"2","Parsed with column specification:
+cols(
+  .default = col_character(),
+  KEY_CODE = [32mcol_double()[39m
+)
+"
+"2","See spec(...) for full column specifications.
+"
+"0","listMeshOsaka <- lapply(listMeshCode[3:4], fLoadMeshStats)"
+"2","Parsed with column specification:
+cols(
+  .default = col_character(),
+  KEY_CODE = [32mcol_double()[39m
+)
+"
+"2","See spec(...) for full column specifications.
+"
+"2","Parsed with column specification:
+cols(
+  .default = col_character(),
+  KEY_CODE = [32mcol_double()[39m
+)
+"
+"2","See spec(...) for full column specifications.
+"
+"0","#関数を作成する。"
+"0","#2つのデータフレームを行方向に統合"
+"0","#dplyr::select()で必要な変数のみを残す"
+"0","#totalEstbとして宿泊業，飲食サービス業の事業所数の変数作成"
+"0","#totalAmuseとして生活関連サービス業，娯楽業の事業所数の変数作成"
+"0","#人がいない区域や非表示の区域はNAとして変換"
+"0","marginMesh <- function(listMeshStats){"
+"0","dfMesh <- dplyr::bind_rows(listMeshStats) %>%"
+"0","  dplyr::select(KEY_CODE, T000918014,T000918015) %>%"
+"0","  dplyr::mutate(KEY_CODE = as.character(KEY_CODE)) %>%"
+"0","  dplyr::mutate(totalEstb = na_if(T000918014, ""-"")) %>%"
+"0","  dplyr::mutate(totalEstb = na_if(T000918014, ""*"")) %>%"
+"0","  dplyr::mutate(totalEstb = as.numeric(totalEstb)) %>% "
+"0","  dplyr::mutate(totalAmuse = na_if(T000918015, ""-"")) %>%"
+"0","  dplyr::mutate(totalAmuse = na_if(T000918015, ""*"")) %>%"
+"0","  dplyr::mutate(totalAmuse = as.numeric(totalAmuse)) %>% "
+"0","  #NAをゼロに変更"
+"0","  dplyr::mutate(totalEstb = if_else(is.na(totalEstb), 0, totalEstb)) %>%"
+"0","  dplyr::mutate(totalAmuse = if_else(is.na(totalAmuse), 0, totalAmuse)) %>%"
+"0",""
+"0","  dplyr::distinct(KEY_CODE, .keep_all = TRUE)"
+"0","  return(dfMesh)"
+"0","}"
+"0",""
+"0",""
+"0","dfMeshTokyo <- marginMesh(listMeshTokyo)"
+"0","dfMeshOsaka <- marginMesh(listMeshOsaka)"
